@@ -22,6 +22,10 @@
 #include <getopt.h>
 #include <inttypes.h>
 
+/* #define FESVR_POKE_DRAM_BEFORE_START */
+#define FESVR_POKE_DRAM_AFTER_START
+
+
 /* Attempt to determine the execution prefix automatically.  autoconf
  * sets PREFIX, and pconfigure sets __PCONFIGURE__PREFIX. */
 #if !defined(PREFIX) && defined(__PCONFIGURE__PREFIX)
@@ -35,6 +39,10 @@
 #ifndef TARGET_DIR
 # define TARGET_DIR "/" TARGET_ARCH "/bin/"
 #endif
+
+#define fesvr_printf(...)       \
+  fprintf(stdout, __VA_ARGS__); \
+  fflush(stdout);
 
 static volatile bool signal_exit = false;
 static void handle_signal(int sig)
@@ -85,26 +93,21 @@ htif_t::~htif_t()
 
 void htif_t::start()
 {
-  fprintf(stdout, "htif_t::start targs.empty: %d targs[0] %s\n", targs.empty(), targs[0]);
-  fflush(stdout);
+  fesvr_printf("htif_t::start targs.empty: %d targs[0] %s\n", targs.empty(), targs[0]);
 
   if (!targs.empty() && targs[0] != "none") {
-    fprintf(stdout, "!targs.empty() && targs[0] != none\n");
-    fflush(stdout);
+    fesvr_printf("!targs.empty() && targs[0] != none\n");
     try {
       load_program();
     } catch (const incompat_xlen & err) {
-      fprintf(stdout, "Error: cannot execute %d-bit program on RV%d hart\n", err.actual_xlen, err.expected_xlen);
-      fflush(stdout);
+      fesvr_printf("Error: cannot execute %d-bit program on RV%d hart\n", err.actual_xlen, err.expected_xlen);
       exit(1);
     }
   }
-  fprintf(stdout, "htif_t, load_program done\n");
-  fflush(stdout);
+  fesvr_printf("htif_t, load_program done\n");
 
   reset();
-  fprintf(stdout, "htif reset done\n");
-  fflush(stdout);
+  fesvr_printf("htif reset done\n");
 }
 
 static void bad_address(const std::string& situation, reg_t addr)
@@ -116,8 +119,7 @@ static void bad_address(const std::string& situation, reg_t addr)
 
 std::map<std::string, uint64_t> htif_t::load_payload(const std::string& payload, reg_t* entry)
 {
-  fprintf(stdout, "htif_t::load_payload\n");
-  fflush(stdout);
+  fesvr_printf("htif_t::load_payload\n");
 
   std::string path;
   if (access(payload.c_str(), F_OK) == 0)
@@ -150,8 +152,15 @@ std::map<std::string, uint64_t> htif_t::load_payload(const std::string& payload,
 
     void write(addr_t taddr, size_t len, const void* src) override
     {
-      if (!htif->is_address_preloaded(taddr, len))
+      if (!htif->is_address_preloaded(taddr, len)) {
         memif_t::write(taddr, len, src);
+        fesvr_printf("taddr %" PRIx64 ", len %" PRIx64 " 0x", taddr, len);
+        char* src_char = (char*)src;
+        for (int i = 0; i < len; i++) {
+          fesvr_printf("%c", src_char[i]);
+        }
+        fesvr_printf("\n");
+      }
     }
 
    private:
@@ -159,47 +168,39 @@ std::map<std::string, uint64_t> htif_t::load_payload(const std::string& payload,
   } preload_aware_memif(this);
 
 
-  fprintf(stdout, "before load_elf\n");
-  fflush(stdout);
+  fesvr_printf("before load_elf\n");
 
   try {
     return load_elf(path.c_str(), &preload_aware_memif, entry, expected_xlen);
   } catch (mem_trap_t& t) {
-    fprintf(stdout, "bad_address\n");
-    fflush(stdout);
+    fesvr_printf("bad_address\n");
 
     bad_address("loading payload " + payload, t.get_tval());
     abort();
   }
 
-  fprintf(stdout, "after load_elf\n");
-  fflush(stdout);
+  fesvr_printf("after load_elf\n");
 }
 
 void htif_t::load_program()
 {
-  fprintf(stdout, "htif_t::load_program\n");
-  fflush(stdout);
+  fesvr_printf("htif_t::load_program\n");
 
   std::map<std::string, uint64_t> symbols = load_payload(targs[0], &entry);
   for ( const auto &pld : symbols ) {
-    std::cout << pld.first << pld.second << std::endl;
+    std::cout << pld.first << " " << std::hex << pld.second << std::endl;
   }
 
-  fprintf(stdout, "htif_t::load_payload\n");
-  fflush(stdout);
+  fesvr_printf("htif_t::load_payload\n");
 
-  fprintf(stdout, "symbols[tohost] %d symbols[fromhost] %d\n", symbols.count("tohost"), symbols.count("fromhost"));
-  fflush(stdout);
+  fesvr_printf("symbols[tohost] %d symbols[fromhost] %d\n", symbols.count("tohost"), symbols.count("fromhost"));
 
   if (symbols.count("tohost") && symbols.count("fromhost")) {
     tohost_addr = symbols["tohost"];
     fromhost_addr = symbols["fromhost"];
-    fprintf(stdout, "tohost_addr 0x%" PRIx64 " fromhost_addr 0x%" PRIx64 "\n", tohost_addr, fromhost_addr);
-    fflush(stdout);
+    fesvr_printf("tohost_addr 0x%" PRIx64 " fromhost_addr 0x%" PRIx64 "\n", tohost_addr, fromhost_addr);
   } else {
-    fprintf(stdout, "warning: tohost and fromhost symbols not in ELF; can't communicate with target\n");
-    fflush(stdout);
+    fesvr_printf("warning: tohost and fromhost symbols not in ELF; can't communicate with target\n");
   }
 
   // detect torture tests so we can print the memory signature at the end
@@ -286,11 +287,96 @@ void htif_t::clear_chunk(addr_t taddr, size_t len)
 
 int htif_t::run()
 {
-  fprintf(stdout, "htif_t::run()\n");
-  fflush(stdout);
+  fesvr_printf("htif_t::run()\n");
 
-  fprintf(stdout, "htif_t::start()\n");
+#ifdef FESVR_POKE_DRAM_BEFORE_START
+  fesvr_printf("calling reset before program load\n");
+  reset();
+
+  fesvr_printf("accessing memory before program load\n");
+  class probe_memif_t : public memif_t {
+   public:
+     probe_memif_t(htif_t* htif) : memif_t(htif), htif(htif) {}
+
+   private:
+     htif_t* htif;
+  } probe_memif(this);
+
+  addr_t binary_base_addr = 0x80000000;
+  char write_string[8] = {'D', 'E', 'A', 'D', 'B', 'E', 'A', 'F'};
+  size_t probe_bytes = 8L;
+  size_t pagesize_bytes = 128L;
+  size_t probe_count = pagesize_bytes / probe_bytes;
+  char* buf = (char*)malloc(sizeof(char) * pagesize_bytes);
+
+  // Read should return zeros
+  for (size_t ii = 0; ii < probe_count; ii++) {
+    size_t offset_bytes = probe_bytes * ii;
+    addr_t probe_addr = binary_base_addr + offset_bytes;
+    char* cur_buf = (char*)(buf + offset_bytes);
+    probe_memif.read(probe_addr, probe_bytes, (void*)cur_buf);
+    fesvr_printf("probe_memif.read(%" PRIx64 ", %" PRIu64 "): 0x",
+                  probe_addr, probe_bytes);
+    for (int jj = 0; jj < probe_count; jj++) {
+      fesvr_printf("%c", cur_buf[jj]);
+    }
+    fesvr_printf("\n");
+  }
+
+  // Write DEADBEAF
+  for (size_t ii = 0; ii < probe_count; ii++) {
+    size_t offset_bytes = probe_bytes * ii;
+    addr_t probe_addr = binary_base_addr + offset_bytes;
+    probe_memif.write(probe_addr, probe_bytes, (void*)write_string);
+  }
+
+  // Read should return DEADBEAF
+  for (size_t ii = 0; ii < probe_count; ii++) {
+    size_t offset_bytes = probe_bytes * ii;
+    addr_t probe_addr = binary_base_addr + offset_bytes;
+    char* cur_buf = (char*)(buf + offset_bytes);
+    probe_memif.read(probe_addr, probe_bytes, (void*)cur_buf);
+    fesvr_printf("probe_memif.read(%" PRIx64 ", %" PRIu64 "): 0x",
+                  probe_addr, probe_bytes);
+    for (int jj = 0; jj < probe_count; jj++) {
+      fesvr_printf("%c", cur_buf[jj]);
+    }
+    fesvr_printf("\n");
+  }
+#endif
+
+  fesvr_printf("htif_t::start()\n");
   start();
+
+#ifdef FESVR_POKE_DRAM_AFTER_START
+  fesvr_printf("reading program region after binary load\n");
+  class probe_memif_t : public memif_t {
+   public:
+     probe_memif_t(htif_t* htif) : memif_t(htif), htif(htif) {}
+
+   private:
+     htif_t* htif;
+  } probe_memif(this);
+
+  addr_t binary_base_addr = 0x80000000;
+  size_t probe_bytes = 8L;
+  size_t pagesize_bytes = 1024L;
+  size_t probe_count = pagesize_bytes / probe_bytes;
+  char* buf = (char*)malloc(sizeof(char) * pagesize_bytes);
+
+  for (size_t ii = 0; ii < probe_count; ii++) {
+    size_t offset_bytes = probe_bytes * ii;
+    addr_t probe_addr = binary_base_addr + offset_bytes;
+    char* cur_buf = (char*)(buf + offset_bytes);
+    probe_memif.read(probe_addr, probe_bytes, (void*)cur_buf);
+    fesvr_printf("probe_memif.read(%" PRIx64 ", %" PRIu64 "): 0x",
+                  probe_addr, probe_bytes);
+    for (int jj = 0; jj < probe_count; jj++) {
+      fesvr_printf("%c", cur_buf[jj]);
+    }
+    fesvr_printf("\n");
+  }
+#endif
 
   auto enq_func = [](std::queue<reg_t>* q, uint64_t x) { q->push(x); };
   std::queue<reg_t> fromhost_queue;
