@@ -22,8 +22,9 @@
 #include <getopt.h>
 #include <inttypes.h>
 
-/* #define FESVR_POKE_DRAM_BEFORE_START */
-#define FESVR_POKE_DRAM_AFTER_START
+#define FESVR_POKE_DRAM_BEFORE_START
+/* #define FESVR_POKE_DRAM_AFTER_START */
+/* #define FESVR_CALL_RESET_BEFORE_PROGRAM_LOAD */
 
 
 /* Attempt to determine the execution prefix automatically.  autoconf
@@ -93,8 +94,6 @@ htif_t::~htif_t()
 
 void htif_t::start()
 {
-  fesvr_printf("htif_t::start targs.empty: %d targs[0] %s\n", targs.empty(), targs[0]);
-
   if (!targs.empty() && targs[0] != "none") {
     fesvr_printf("!targs.empty() && targs[0] != none\n");
     try {
@@ -156,7 +155,7 @@ std::map<std::string, uint64_t> htif_t::load_payload(const std::string& payload,
         memif_t::write(taddr, len, src);
         fesvr_printf("taddr %" PRIx64 ", len %" PRIx64 " 0x", taddr, len);
         char* src_char = (char*)src;
-        for (int i = 0; i < len; i++) {
+        for (size_t i = 0; i < len; i++) {
           fesvr_printf("%c", src_char[i]);
         }
         fesvr_printf("\n");
@@ -192,8 +191,7 @@ void htif_t::load_program()
   }
 
   fesvr_printf("htif_t::load_payload\n");
-
-  fesvr_printf("symbols[tohost] %d symbols[fromhost] %d\n", symbols.count("tohost"), symbols.count("fromhost"));
+  fesvr_printf("symbols[tohost] %ld symbols[fromhost] %ld\n", symbols.count("tohost"), symbols.count("fromhost"));
 
   if (symbols.count("tohost") && symbols.count("fromhost")) {
     tohost_addr = symbols["tohost"];
@@ -289,60 +287,84 @@ int htif_t::run()
 {
   fesvr_printf("htif_t::run()\n");
 
-#ifdef FESVR_POKE_DRAM_BEFORE_START
+#ifdef FESVR_CALL_RESET_BEFORE_PROGRAM_LOAD
   fesvr_printf("calling reset before program load\n");
   reset();
+#endif
 
+#ifdef FESVR_POKE_DRAM_BEFORE_START
   fesvr_printf("accessing memory before program load\n");
   class probe_memif_t : public memif_t {
    public:
      probe_memif_t(htif_t* htif) : memif_t(htif), htif(htif) {}
 
+
+     void probe_physical_address(addr_t start, addr_t end) {
+       size_t pagesize_bytes = 4096;
+       if (end < start + pagesize_bytes * 2) return;
+
+       addr_t med = (start + end) / 2;
+       if (probe_region_head_tail(start, med, pagesize_bytes)) {
+         fesvr_printf("FAILED MEMORY PROBE 0x%" PRIx64 " ~ 0x%" PRIx64 "\n", start, med);
+         probe_physical_address(start, med);
+       }
+
+       if (probe_region_head_tail(med, end, pagesize_bytes)) {
+         fesvr_printf("FAILED MEMORY PROBE 0x%" PRIx64 " ~ 0x%" PRIx64 "\n", med, end);
+         probe_physical_address(med, end);
+       }
+     }
+
    private:
      htif_t* htif;
+
+     bool probe_region(addr_t addr, size_t len) {
+       char   write_string[64] = {
+         'D', 'E', 'A', 'D', 'B', 'E', 'A', 'F',
+         'D', 'E', 'A', 'D', 'B', 'E', 'A', 'F',
+         'D', 'E', 'A', 'D', 'B', 'E', 'A', 'F',
+         'D', 'E', 'A', 'D', 'B', 'E', 'A', 'F',
+         'D', 'E', 'A', 'D', 'B', 'E', 'A', 'F',
+         'D', 'E', 'A', 'D', 'B', 'E', 'A', 'F',
+         'D', 'E', 'A', 'D', 'B', 'E', 'A', 'F',
+         'D', 'E', 'A', 'D', 'B', 'E', 'A', 'F'
+       };
+       size_t probe_bytes = 64;
+       assert(len % probe_bytes == 0);
+
+       size_t probe_cnt = len / probe_bytes;
+       for (size_t ii = 0; ii < probe_cnt; ii++) {
+         size_t probe_addr = addr + probe_bytes * ii;
+         this->write(probe_addr, probe_bytes, (void*)write_string);
+       }
+
+       bool fail = false;
+       char* buf = (char*)malloc(sizeof(char) * len);
+       for (size_t ii = 0; ii < probe_cnt; ii++) {
+         size_t probe_addr = addr + probe_bytes * ii;
+         this->read(probe_addr, probe_bytes, (void*)buf);
+/* for (size_t ii = 0; ii < len; ii++) { */
+/* fesvr_printf("buff[%" PRIu64 "]: %c\n", ii, buf[ii]); */
+/* } */
+         for (size_t jj = 0; jj < probe_bytes; jj++) {
+           if (buf[jj] != write_string[jj]) {
+/* fesvr_printf("expected: %c %02x got %s, %02x\n", write_string[jj], write_string[jj], buf[jj], buf[jj]); */
+             fail = true;
+           }
+         }
+       }
+
+       return fail;
+     }
+
+     bool probe_region_head_tail(addr_t start, addr_t end, size_t len) {
+       return probe_region(start, len) || probe_region(end - len, len);
+     }
   } probe_memif(this);
 
-  addr_t binary_base_addr = 0x80000000;
-  char write_string[8] = {'D', 'E', 'A', 'D', 'B', 'E', 'A', 'F'};
-  size_t probe_bytes = 8L;
-  size_t pagesize_bytes = 128L;
-  size_t probe_count = pagesize_bytes / probe_bytes;
-  char* buf = (char*)malloc(sizeof(char) * pagesize_bytes);
-
-  // Read should return zeros
-  for (size_t ii = 0; ii < probe_count; ii++) {
-    size_t offset_bytes = probe_bytes * ii;
-    addr_t probe_addr = binary_base_addr + offset_bytes;
-    char* cur_buf = (char*)(buf + offset_bytes);
-    probe_memif.read(probe_addr, probe_bytes, (void*)cur_buf);
-    fesvr_printf("probe_memif.read(%" PRIx64 ", %" PRIu64 "): 0x",
-                  probe_addr, probe_bytes);
-    for (int jj = 0; jj < probe_count; jj++) {
-      fesvr_printf("%c", cur_buf[jj]);
-    }
-    fesvr_printf("\n");
-  }
-
-  // Write DEADBEAF
-  for (size_t ii = 0; ii < probe_count; ii++) {
-    size_t offset_bytes = probe_bytes * ii;
-    addr_t probe_addr = binary_base_addr + offset_bytes;
-    probe_memif.write(probe_addr, probe_bytes, (void*)write_string);
-  }
-
-  // Read should return DEADBEAF
-  for (size_t ii = 0; ii < probe_count; ii++) {
-    size_t offset_bytes = probe_bytes * ii;
-    addr_t probe_addr = binary_base_addr + offset_bytes;
-    char* cur_buf = (char*)(buf + offset_bytes);
-    probe_memif.read(probe_addr, probe_bytes, (void*)cur_buf);
-    fesvr_printf("probe_memif.read(%" PRIx64 ", %" PRIu64 "): 0x",
-                  probe_addr, probe_bytes);
-    for (int jj = 0; jj < probe_count; jj++) {
-      fesvr_printf("%c", cur_buf[jj]);
-    }
-    fesvr_printf("\n");
-  }
+  addr_t firesim_start_addr = 0x0L;
+  addr_t firesim_end_addr   = 0x400000000L;
+  probe_memif.probe_physical_address(firesim_start_addr, firesim_end_addr);
 #endif
 
   fesvr_printf("htif_t::start()\n");
