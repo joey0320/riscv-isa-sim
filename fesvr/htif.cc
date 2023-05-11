@@ -298,20 +298,10 @@ int htif_t::run()
    public:
      probe_memif_t(htif_t* htif) : memif_t(htif), htif(htif) {}
 
-
      void probe_physical_address(addr_t start, addr_t end) {
-       size_t pagesize_bytes = 4096;
-       if (end < start + pagesize_bytes * 2) return;
-
-       addr_t med = (start + end) / 2;
-       if (probe_region_head_tail(start, med, pagesize_bytes)) {
-         fesvr_printf("FAILED MEMORY PROBE 0x%" PRIx64 " ~ 0x%" PRIx64 "\n", start, med);
-         probe_physical_address(start, med);
-       }
-
-       if (probe_region_head_tail(med, end, pagesize_bytes)) {
-         fesvr_printf("FAILED MEMORY PROBE 0x%" PRIx64 " ~ 0x%" PRIx64 "\n", med, end);
-         probe_physical_address(med, end);
+       size_t res_array[] = { (1LL < 30LL), (1LL << 29LL), (1LL << 28LL) };
+       for (int i = 0; i < 3; i++) {
+         probe_physical_address_with_resolution(start, end, res_array[i]);
        }
      }
 
@@ -319,17 +309,10 @@ int htif_t::run()
      htif_t* htif;
 
      bool probe_region(addr_t addr, size_t len) {
-       char   write_string[64] = {
-         'D', 'E', 'A', 'D', 'B', 'E', 'A', 'F',
-         'D', 'E', 'A', 'D', 'B', 'E', 'A', 'F',
-         'D', 'E', 'A', 'D', 'B', 'E', 'A', 'F',
-         'D', 'E', 'A', 'D', 'B', 'E', 'A', 'F',
-         'D', 'E', 'A', 'D', 'B', 'E', 'A', 'F',
-         'D', 'E', 'A', 'D', 'B', 'E', 'A', 'F',
-         'D', 'E', 'A', 'D', 'B', 'E', 'A', 'F',
+       char write_string[8] = {
          'D', 'E', 'A', 'D', 'B', 'E', 'A', 'F'
        };
-       size_t probe_bytes = 64;
+       size_t probe_bytes = 8;
        assert(len % probe_bytes == 0);
 
        size_t probe_cnt = len / probe_bytes;
@@ -358,7 +341,16 @@ int htif_t::run()
      }
 
      bool probe_region_head_tail(addr_t start, addr_t end, size_t len) {
+       fesvr_printf("PROBE_REGION 0x%" PRIx64 " ~ 0x%" PRIx64 "\n", start, end);
        return probe_region(start, len) || probe_region(end - len, len);
+     }
+
+     void probe_physical_address_with_resolution(addr_t start, addr_t end, size_t probe_resolution) {
+       for (addr_t addr = end; addr >= start + probe_resolution; addr -= probe_resolution) {
+         if (probe_region_head_tail(addr - probe_resolution, addr, 8)) {
+           fesvr_printf("PROBE_FAILED 0x%" PRIx64 " ~ 0x%" PRIx64 "\n", addr - probe_resolution, addr);
+         }
+       }
      }
   } probe_memif(this);
 
