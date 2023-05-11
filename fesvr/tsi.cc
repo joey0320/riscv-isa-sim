@@ -63,8 +63,8 @@ void tsi_t::read_chunk(addr_t taddr, size_t nbytes, void* dst)
     while (out_data.empty())
       switch_to_target();
     result[i] = out_data.front();
-    fprintf(stdout, "tsi_t::read_chunk result[%d] 0x%" PRIx32 "\n", i, result[i]);
-    fflush(stdout);
+/* fprintf(stdout, "tsi_t::read_chunk result[%d] 0x%" PRIx32 "\n", i, result[i]); */
+/* fflush(stdout); */
     out_data.pop_front();
   }
 }
@@ -78,10 +78,10 @@ void tsi_t::write_chunk(addr_t taddr, size_t nbytes, const void* src)
   push_addr(taddr);
   push_len(len - 1);
 
-  for (int i = 0; i < len; i++) {
-    fprintf(stdout, "tsi_t::write_chunk src_data[%d] 0x%" PRIx32 "\n", i, src_data[i]);
-    fflush(stdout);
-  }
+/* for (int i = 0; i < len; i++) { */
+/* fprintf(stdout, "tsi_t::write_chunk src_data[%d] 0x%" PRIx32 "\n", i, src_data[i]); */
+/* fflush(stdout); */
+/* } */
 
   in_data.insert(in_data.end(), src_data, src_data + len);
 }

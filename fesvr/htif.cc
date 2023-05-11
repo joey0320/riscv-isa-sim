@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <assert.h>
 #include <vector>
+#include <set>
 #include <queue>
 #include <iostream>
 #include <fstream>
@@ -24,8 +25,8 @@
 
 #define FESVR_POKE_DRAM_BEFORE_START
 /* #define FESVR_POKE_DRAM_AFTER_START */
-/* #define FESVR_CALL_RESET_BEFORE_PROGRAM_LOAD */
-
+/* #define FESVR_PRINT_PRELOAD_AWARE_MEMIF */
+/* #define fprintf(stdout, fmt, ...) (0) */
 
 /* Attempt to determine the execution prefix automatically.  autoconf
  * sets PREFIX, and pconfigure sets __PCONFIGURE__PREFIX. */
@@ -136,7 +137,7 @@ std::map<std::string, uint64_t> htif_t::load_payload(const std::string& payload,
       );
   }
 
-  std::cout << path << std::endl;
+/* std::cout << path << std::endl; */
 
   if (path.empty())
     throw std::runtime_error(
@@ -153,12 +154,14 @@ std::map<std::string, uint64_t> htif_t::load_payload(const std::string& payload,
     {
       if (!htif->is_address_preloaded(taddr, len)) {
         memif_t::write(taddr, len, src);
+#ifdef FESVR_PRINT_PRELOAD_AWARE_MEMIF
         fesvr_printf("taddr %" PRIx64 ", len %" PRIx64 " 0x", taddr, len);
         char* src_char = (char*)src;
         for (size_t i = 0; i < len; i++) {
           fesvr_printf("%c", src_char[i]);
         }
         fesvr_printf("\n");
+#endif
       }
     }
 
@@ -186,9 +189,9 @@ void htif_t::load_program()
   fesvr_printf("htif_t::load_program\n");
 
   std::map<std::string, uint64_t> symbols = load_payload(targs[0], &entry);
-  for ( const auto &pld : symbols ) {
-    std::cout << pld.first << " " << std::hex << pld.second << std::endl;
-  }
+/* for ( const auto &pld : symbols ) { */
+/* std::cout << pld.first << " " << std::hex << pld.second << std::endl; */
+/* } */
 
   fesvr_printf("htif_t::load_payload\n");
   fesvr_printf("symbols[tohost] %ld symbols[fromhost] %ld\n", symbols.count("tohost"), symbols.count("fromhost"));
@@ -307,6 +310,8 @@ int htif_t::run()
 
    private:
      htif_t* htif;
+
+     std::set<addr_t> invalid_phys_addr;
 
      bool probe_region(addr_t addr, size_t len) {
        char write_string[8] = {
